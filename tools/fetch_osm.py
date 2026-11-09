@@ -339,10 +339,24 @@ def plant_type(tags):
     return ""
 
 
-DEFAULT_MW = {"aes": 2000, "tes_coal": 800, "tes_gas": 200, "tec": 200, "ges": 150,
+DEFAULT_MW = {"aes": 2000, "tes_coal": 800, "tes_gas": 0, "tec": 80, "ges": 30,
               "gaes": 300, "ses": 0, "ves": 0}
 MIN_MW = {"aes": 1, "tes_coal": 20, "tes_gas": 20, "tec": 20, "ges": 10, "gaes": 10,
           "ses": 20, "ves": 20}
+
+
+STATS = {}
+
+
+def retired(tags):
+    """Закрытые / недостроенные станции (например, ЧАЭС)."""
+    for k in tags:
+        if k.split(":")[0] in ("disused", "abandoned", "demolished", "construction", "proposed", "was", "razed"):
+            return True
+    if tags.get("end_date") or tags.get("power") != "plant":
+        return True
+    n = (tags.get("name", "") + " " + tags.get("name:ru", "") + " " + tags.get("name:en", "")).lower()
+    return any(w in n for w in ("чорнобил", "чернобыл", "chernobyl", "chornobyl"))
 
 
 def center(e):
@@ -383,6 +397,10 @@ class Grid:
 
 
 def build_grid(line_els, sub_els, plant_els):
+    STATS.update({"lines_raw": len(line_els), "subs_raw": len(sub_els), "plants_raw": len(plant_els)})
+    STATS["subs_no_pos"] = sum(1 for e in sub_els if not center(e))
+    STATS["subs_types"] = {t: sum(1 for e in sub_els if e.get("type") == t) for t in ("node", "way", "relation")}
+    STATS["sub_sample"] = sub_els[:2]
     nodes = {}
     order = []
 
@@ -410,7 +428,8 @@ def build_grid(line_els, sub_els, plant_els):
             continue
         tags = e.get("tags", {})
         pt = plant_type(tags)
-        if not pt:
+        if not pt or retired(tags):
+            STATS["plants_skipped"] = STATS.get("plants_skipped", 0) + 1
             continue
         mw = parse_mw(tags.get("plant:output:electricity"))
         if mw <= 0:
@@ -568,8 +587,8 @@ def main():
         ("grid.json", "энергосеть",
          lambda: build_grid(
              overpass('way["power"="line"]["voltage"~"(750000|400000|330000|220000)"](area.ua);out geom;'),
-             overpass('nwr["power"="substation"]["voltage"~"(750000|400000|330000|220000)"](area.ua);out center tags;'),
-             overpass('nwr["power"="plant"](area.ua);out center tags;')),
+             overpass('nwr["power"="substation"]["voltage"~"(750000|400000|330000|220000)"](area.ua);out center;'),
+             overpass('nwr["power"="plant"](area.ua);out center;')),
          lambda r: len(r["edges"]) >= 30),
     ]
     for fname, label, fn, check in steps:
@@ -583,6 +602,8 @@ def main():
             good += 1
         except Exception as e:  # noqa: BLE001
             print(f"  ОШИБКА {label}: {e}", flush=True)
+    STATS["good"] = good
+    save(out_dir, "stats.json", STATS)
     if good == len(steps):
         open(os.path.join(out_dir, "ok"), "w").close()
     print(f"готово: {good}/{len(steps)}", flush=True)

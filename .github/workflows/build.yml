@@ -51,7 +51,7 @@ jobs:
       - name: Use OSM data
         run: |
           ls -la osm_cache || true
-          for f in oblasts.json rivers.json cities.json grid.json; do
+          for f in oblasts.json rivers.json cities.json grid.json stats.json; do
             if [ -s "osm_cache/$f" ]; then cp "osm_cache/$f" assets/data/; echo "OSM: $f"; else echo "запасной: $f"; fi
           done
           ls -la assets/data
