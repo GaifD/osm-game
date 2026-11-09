@@ -1,0 +1,19 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+# папки платформ генерируются при сборке (flutter create)
+/android/
+/ios/
+/windows/
+/linux/
+/macos/
+/web/
+/test/
+.metadata
+osm_cache/
+*.iml
+.idea/

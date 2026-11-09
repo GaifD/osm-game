@@ -1,0 +1,103 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      refresh_osm:
+        description: "Заново скачать данные OSM"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- данные OpenStreetMap (кэшируются, качаются редко)
+      - name: Restore OSM cache
+        id: osmcache
+        uses: actions/cache/restore@v4
+        with:
+          path: osm_cache
+          key: osm-data-v1-${{ hashFiles('tools/fetch_osm.py') }}-none
+          restore-keys: osm-data-v1-${{ hashFiles('tools/fetch_osm.py') }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download OSM data
+        id: fetch
+        if: hashFiles('osm_cache/ok') == '' || inputs.refresh_osm
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          rm -rf osm_cache
+          python tools/fetch_osm.py osm_cache
+
+      - name: Save OSM cache
+        if: steps.fetch.outcome == 'success' && hashFiles('osm_cache/ok') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: osm_cache
+          key: osm-data-v1-${{ hashFiles('tools/fetch_osm.py') }}-${{ github.run_id }}
+
+      - name: Use OSM data
+        run: |
+          ls -la osm_cache || true
+          for f in oblasts.json rivers.json cities.json grid.json; do
+            if [ -s "osm_cache/$f" ]; then cp "osm_cache/$f" assets/data/; echo "OSM: $f"; else echo "запасной: $f"; fi
+          done
+          ls -la assets/data
+
+      # ---------- Flutter
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+          cache: true
+
+      - name: Generate platform folders
+        run: |
+          flutter create --platforms=android --org com.gaifd --project-name osm_game .
+          sed -i 's/android:label="[^"]*"/android:label="OSM Game"/' android/app/src/main/AndroidManifest.xml
+          mkdir -p ~/.android
+          cp ci/debug.keystore ~/.android/debug.keystore
+
+      - run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Rename
+        run: |
+          VER=0.1.${{ github.run_number }}
+          echo "VER=$VER" >> $GITHUB_ENV
+          cp build/app/outputs/flutter-apk/app-release.apk osm-game-$VER.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: osm-game-apk
+          path: osm-game-*.apk
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VER }}
+          name: OSM Game ${{ env.VER }}
+          body: Тестовая сборка v0.1. Скачай APK ниже и установи на телефон.
+          files: osm-game-*.apk

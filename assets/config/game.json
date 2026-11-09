@@ -1,0 +1,92 @@
+{
+  "_info": "Все здания, ресурсы и напряжения игры. Чтобы добавить новое здание — добавь запись в buildings, код менять не нужно (если kind уже существует).",
+
+  "cityKwPerPerson": 0.55,
+  "trainCapacityT": 3000,
+  "trainSpeedKmh": 60,
+  "autoFeederKm": 30,
+
+  "voltages": [
+    {"kv": 750, "capMw": 2500, "lossPer100km": 0.6, "color": "#B388FF", "width": 3.2},
+    {"kv": 400, "capMw": 1200, "lossPer100km": 0.9, "color": "#448AFF", "width": 2.8},
+    {"kv": 330, "capMw": 800,  "lossPer100km": 1.3, "color": "#FF5252", "width": 2.4},
+    {"kv": 220, "capMw": 350,  "lossPer100km": 2.0, "color": "#FFAB40", "width": 2.0},
+    {"kv": 110, "capMw": 90,   "lossPer100km": 4.0, "color": "#FFD740", "width": 1.5},
+    {"kv": 35,  "capMw": 15,   "lossPer100km": 9.0, "color": "#69F0AE", "width": 1.1}
+  ],
+
+  "resources": [
+    {"id": "coal",  "name": "Уголь", "unit": "т", "color": "#9E9E9E"},
+    {"id": "ore",   "name": "Руда",  "unit": "т", "color": "#D84315"},
+    {"id": "steel", "name": "Сталь", "unit": "т", "color": "#90CAF9"}
+  ],
+
+  "deposits": [
+    {"res": "coal", "name": "Донецкий бассейн",          "lat": 48.15, "lon": 38.30, "rKm": 110},
+    {"res": "coal", "name": "Львовско-Волынский бассейн", "lat": 50.45, "lon": 24.20, "rKm": 35},
+    {"res": "coal", "name": "Днепровский бассейн (бурый)", "lat": 48.75, "lon": 32.60, "rKm": 40},
+    {"res": "ore",  "name": "Криворожский бассейн",      "lat": 47.95, "lon": 33.40, "rKm": 35},
+    {"res": "ore",  "name": "Кременчугский район",       "lat": 49.15, "lon": 33.35, "rKm": 20},
+    {"res": "ore",  "name": "Белозёрский район",         "lat": 47.30, "lon": 35.00, "rKm": 20}
+  ],
+
+  "categories": [
+    {"id": "power",    "name": "Станции",  "icon": "⚡"},
+    {"id": "grid",     "name": "Сеть",     "icon": "🔌"},
+    {"id": "mining",   "name": "Добыча",   "icon": "⛏"},
+    {"id": "industry", "name": "Заводы",   "icon": "🏭"},
+    {"id": "rail",     "name": "ЖД",       "icon": "🚂"}
+  ],
+
+  "buildings": [
+    {"id": "aes", "name": "АЭС", "icon": "⚛", "cat": "power", "kind": "plant", "gen": "nuclear",
+     "mw": 2000, "kv": [750, 330],
+     "desc": "Огромная мощность, работает ровно и не маневрирует. Топливо — по контракту."},
+    {"id": "tes_coal", "name": "ТЭС (уголь)", "icon": "🏭", "cat": "power", "kind": "plant", "gen": "thermal",
+     "mw": 1200, "kv": [330, 220, 110], "fuel": {"coal": 0.4}, "store": 80000,
+     "desc": "Нужен уголь: 0,4 т на МВт·ч. Привези поездом со шахты."},
+    {"id": "tes_gas", "name": "ТЭС (газ)", "icon": "🔥", "cat": "power", "kind": "plant", "gen": "thermal",
+     "mw": 400, "kv": [330, 220, 110],
+     "desc": "Газ пока по контракту (газовая отрасль — в следующих версиях)."},
+    {"id": "tec", "name": "ТЭЦ", "icon": "♨", "cat": "power", "kind": "plant", "gen": "thermal",
+     "mw": 250, "kv": [110, 35],
+     "desc": "Свет и тепло для города. Тепло заработает в следующих версиях."},
+    {"id": "ges", "name": "ГЭС", "icon": "💧", "cat": "power", "kind": "plant", "gen": "hydro",
+     "mw": 300, "kv": [330, 110], "requires": "river",
+     "desc": "Только на реке. Мощность зависит от воды."},
+    {"id": "gaes", "name": "ГАЭС", "icon": "🔁", "cat": "power", "kind": "storage", "gen": "storage",
+     "mw": 650, "kv": [330], "requires": "river", "storeMwh": 5000, "eff": 0.75,
+     "desc": "Накопитель: качает воду излишками, отдаёт при дефиците. КПД 75%."},
+    {"id": "ses", "name": "СЭС", "icon": "☀", "cat": "power", "kind": "plant", "gen": "solar",
+     "mw": 50, "kv": [110, 35],
+     "desc": "Работает днём. На юге даёт больше."},
+    {"id": "ves", "name": "ВЭС", "icon": "🌬", "cat": "power", "kind": "plant", "gen": "wind",
+     "mw": 100, "kv": [110, 35],
+     "desc": "Зависит от ветра. Лучше всего — юг и побережье."},
+
+    {"id": "ps750", "name": "ПС 750/330", "icon": "⚡", "cat": "grid", "kind": "sub", "kv": [750, 330], "capMw": 2500,
+     "desc": "Связывает хребет 750 кВ с сетью 330 кВ."},
+    {"id": "ps400", "name": "ПС 400/220/110", "icon": "⚡", "cat": "grid", "kind": "sub", "kv": [400, 220, 110], "capMw": 1000,
+     "desc": "Узел западной сети и перемычек с Европой."},
+    {"id": "ps330", "name": "ПС 330/110", "icon": "⚡", "cat": "grid", "kind": "sub", "kv": [330, 110], "capMw": 600,
+     "desc": "Основная понижающая подстанция."},
+    {"id": "ps220", "name": "ПС 220/110", "icon": "⚡", "cat": "grid", "kind": "sub", "kv": [220, 110], "capMw": 300,
+     "desc": "Понижающая подстанция сети 220 кВ."},
+    {"id": "ps110", "name": "ПС 110/35", "icon": "⚡", "cat": "grid", "kind": "sub", "kv": [110, 35], "capMw": 60,
+     "desc": "Районная подстанция."},
+
+    {"id": "coal_mine", "name": "Угольная шахта", "icon": "⛏", "cat": "mining", "kind": "producer",
+     "produces": {"coal": 300}, "loadMw": 15, "store": 20000, "kv": [110, 35], "requires": "deposit:coal",
+     "desc": "300 т/ч угля. Только на угольном бассейне. Нужно электричество."},
+    {"id": "ore_mine", "name": "Рудник", "icon": "🪨", "cat": "mining", "kind": "producer",
+     "produces": {"ore": 400}, "loadMw": 20, "store": 20000, "kv": [110, 35], "requires": "deposit:ore",
+     "desc": "400 т/ч железной руды. Только на рудном районе."},
+
+    {"id": "steel_mill", "name": "Меткомбинат", "icon": "🏗", "cat": "industry", "kind": "factory",
+     "produces": {"steel": 250}, "inputs": {"ore": 1.6, "coal": 0.8}, "loadMw": 150, "store": 40000, "kv": [110, 35],
+     "desc": "250 т/ч стали. На 1 т стали: 1,6 т руды + 0,8 т угля (кокс). Ест 150 МВт."},
+
+    {"id": "station", "name": "ЖД-станция", "icon": "🚉", "cat": "rail", "kind": "station", "radiusKm": 25,
+     "desc": "Обслуживает здания в радиусе 25 км."}
+  ]
+}
