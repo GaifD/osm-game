@@ -72,8 +72,7 @@ jobs:
         run: |
           flutter create --platforms=android --org com.gaifd --project-name osm_game .
           sed -i 's/android:label="[^"]*"/android:label="OSM Game"/' android/app/src/main/AndroidManifest.xml
-          mkdir -p ~/.android
-          cp ci/debug.keystore ~/.android/debug.keystore
+          python tools/patch_android.py
 
       - run: flutter pub get
 
@@ -81,13 +80,14 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --build-number=${{ github.run_number }} --build-name=0.1.${{ github.run_number }}
 
       - name: Rename
         run: |
           VER=0.1.${{ github.run_number }}
           echo "VER=$VER" >> $GITHUB_ENV
           cp build/app/outputs/flutter-apk/app-release.apk osm-game-$VER.apk
+          keytool -printcert -jarfile osm-game-$VER.apk | grep SHA256
 
       - uses: actions/upload-artifact@v4
         with:
