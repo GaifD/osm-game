@@ -110,7 +110,7 @@ class BuildingDef {
 }
 
 class GameConfig {
-  final double cityKwPerPerson, trainCapacityT, trainSpeedKmh, autoFeederKm;
+  final double cityKwPerPerson, trainCapacityT, trainSpeedKmh, autoFeederKm, truckCapacityT, truckSpeedKmh;
   final List<VoltageDef> voltages;
   final List<ResourceDef> resources;
   final List<DepositDef> deposits;
@@ -118,6 +118,7 @@ class GameConfig {
   final Map<String, BuildingDef> buildings;
 
   GameConfig(this.cityKwPerPerson, this.trainCapacityT, this.trainSpeedKmh, this.autoFeederKm,
+      this.truckCapacityT, this.truckSpeedKmh,
       this.voltages, this.resources, this.deposits, this.categories, this.buildings);
 
   VoltageDef volt(int kv) =>
@@ -170,6 +171,8 @@ class GameConfig {
       ((j['trainCapacityT'] ?? 3000) as num).toDouble(),
       ((j['trainSpeedKmh'] ?? 60) as num).toDouble(),
       ((j['autoFeederKm'] ?? 30) as num).toDouble(),
+      ((j['truckCapacityT'] ?? 600) as num).toDouble(),
+      ((j['truckSpeedKmh'] ?? 70) as num).toDouble(),
       volts, res, deps, cats, b,
     );
   }

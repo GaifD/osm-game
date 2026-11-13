@@ -101,3 +101,49 @@ class Train {
 
   Train(this.id, this.from, this.to);
 }
+
+/// Автоколонна: возит груз по реальным дорогам от здания к зданию.
+class Truck {
+  final String id;
+  final String from, to;
+  List<Offset> route = [];
+  List<double> cum = []; // накопленная длина, км
+  double pos = 0; // км от начала маршрута
+  bool back = false; // едет обратно
+  String cargo = '';
+  double amount = 0;
+  double dwell = 0;
+  String status = '';
+  bool byRoad = true;
+
+  Truck(this.id, this.from, this.to);
+
+  double get total => cum.isEmpty ? 0 : cum.last;
+
+  void setRoute(List<Offset> pts, {bool road = true}) {
+    route = pts;
+    byRoad = road;
+    cum = [0];
+    for (int i = 1; i < pts.length; i++) {
+      cum.add(cum.last + (pts[i] - pts[i - 1]).distance);
+    }
+  }
+
+  Offset? at() {
+    if (route.isEmpty) return null;
+    if (route.length == 1) return route.first;
+    final d = pos.clamp(0.0, total);
+    int lo = 0, hi = cum.length - 1;
+    while (hi - lo > 1) {
+      final m = (lo + hi) >> 1;
+      if (cum[m] <= d) {
+        lo = m;
+      } else {
+        hi = m;
+      }
+    }
+    final seg = cum[hi] - cum[lo];
+    final t = seg <= 0 ? 0.0 : (d - cum[lo]) / seg;
+    return Offset.lerp(route[lo], route[hi], t);
+  }
+}

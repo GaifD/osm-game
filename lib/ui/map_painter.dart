@@ -21,6 +21,9 @@ class Layers {
   bool deposits = true;
   bool labels = true;
   bool feeders = false;
+  bool roads = true;
+  bool osmRail = true;
+  bool kvLabels = true;
 }
 
 class MapPainter extends CustomPainter {
@@ -30,8 +33,10 @@ class MapPainter extends CustomPainter {
   final String? selectedId; // узел/линия/путь
   final String? pendingId; // первая точка при прокладке
   final double pulse;
+  final int? highlightKv; // подсветка совместимых объектов при прокладке ЛЭП
 
   MapPainter({
+    this.highlightKv,
     required this.world,
     required this.cam,
     required this.layers,
@@ -117,6 +122,45 @@ class MapPainter extends CustomPainter {
       canvas.drawPath(p, rp);
     }
 
+    // --- дороги OSM
+    if (layers.roads) {
+      final g = world.map.roads;
+      const colors = [Color(0xFFE0A040), Color(0xFFB8A070), Color(0xFF6E7781)];
+      const widths = [2.2, 1.7, 1.1];
+      for (final cls in [2, 1, 0]) {
+        if (cls == 2 && s < 0.6) continue;
+        final ch = g.chunks[cls];
+        if (ch == null) continue;
+        final p = Paint()
+          ..color = colors[cls].withOpacity(cls == 2 ? 0.55 : 0.75)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = widths[cls] / s
+          ..strokeJoin = StrokeJoin.round;
+        ch.forEach((key, path) {
+          final r = g.chunkRect[key];
+          if (r != null && r.overlaps(view)) canvas.drawPath(path, p);
+        });
+      }
+    }
+
+    // --- железные дороги OSM
+    if (layers.osmRail) {
+      final g = world.map.railways;
+      for (final cls in [1, 0]) {
+        final ch = g.chunks[cls];
+        if (ch == null) continue;
+        final p = Paint()
+          ..color = (cls == 0 ? const Color(0xFF9C7FD0) : const Color(0xFF8D7B6A)).withOpacity(0.7)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.3 / s
+          ..strokeJoin = StrokeJoin.round;
+        ch.forEach((key, path) {
+          final r = g.chunkRect[key];
+          if (r != null && r.overlaps(view)) canvas.drawPath(path, p);
+        });
+      }
+    }
+
     // --- ЖД
     final railP = Paint()
       ..color = AppColors.rail
@@ -179,6 +223,43 @@ class MapPainter extends CustomPainter {
     // ---------------- экранные элементы (фиксированный размер)
     final sv = cam.worldView.inflate(30);
 
+    // подписи напряжения на линиях
+    if (layers.kvLabels && s > 1.6) {
+      int count = 0;
+      for (final l in world.lines.values) {
+        if (l.virtual || l.pts.length < 2) continue;
+        if (l.existing && !layers.existingGrid) continue;
+        final mid = l.pts[l.pts.length ~/ 2 - (l.pts.length.isEven ? 1 : 0)];
+        final mid2 = l.pts[l.pts.length ~/ 2];
+        final m = Offset.lerp(mid, mid2, 0.5)!;
+        if (!sv.contains(m)) continue;
+        if (++count > 120) break;
+        final v = world.cfg.volt(l.kv);
+        final tp = _text('${l.kv}', 9, Colors.black, w: FontWeight.w700);
+        final p = cam.toScreen(m);
+        final rr = RRect.fromRectAndRadius(
+            Rect.fromCenter(center: p, width: tp.width + 6, height: tp.height + 2), const Radius.circular(4));
+        canvas.drawRRect(rr, Paint()..color = v.color);
+        tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
+      }
+    }
+
+    // подсветка совместимых объектов при прокладке ЛЭП
+    if (highlightKv != null) {
+      final c = world.cfg.volt(highlightKv!).color;
+      final ring = Paint()
+        ..color = c.withOpacity(0.55 + 0.45 * pulse)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5;
+      for (final n in world.nodes.values) {
+        if (!n.kv.contains(highlightKv)) continue;
+        if (n.existing && !layers.existingGrid) continue;
+        if (!sv.contains(n.pos)) continue;
+        if (n.isJunction && s < 1.5) continue;
+        canvas.drawCircle(cam.toScreen(n.pos), n.isJunction ? 6 : 16, ring);
+      }
+    }
+
     // подстанции и опоры
     for (final n in world.nodes.values) {
       if (!sv.contains(n.pos)) continue;
@@ -199,6 +280,11 @@ class MapPainter extends CustomPainter {
       if (!n.existing && s > 0.6) {
         final tp = _text('⚡', 9, Colors.white);
         tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
+      }
+      if (layers.kvLabels && (!n.existing || s > 1.2)) {
+        final kvs = (n.kv.toList()..sort((a, b) => b - a)).join('/');
+        final tp = _text(kvs, 9, c, w: FontWeight.w700);
+        tp.paint(canvas, p + Offset(-tp.width / 2, r + 2));
       }
     }
 
@@ -248,9 +334,16 @@ class MapPainter extends CustomPainter {
         final tp = _text(n.icon, 13, Colors.white);
         tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
       }
+      double dy = r + 2;
       if (layers.labels && s > 1.0 && big) {
         final tp = _text(n.name, 10, AppColors.muted);
-        tp.paint(canvas, p + Offset(-tp.width / 2, r + 2));
+        tp.paint(canvas, p + Offset(-tp.width / 2, dy));
+        dy += tp.height;
+      }
+      if (layers.kvLabels && n.def != null && n.def!.isGenerator && n.kv.isNotEmpty && (!n.existing || s > 1.2)) {
+        final kvs = (n.kv.toList()..sort((a, b) => b - a));
+        final tp = _text('${kvs.join("/")} кВ', 9, world.cfg.volt(kvs.first).color, w: FontWeight.w700);
+        tp.paint(canvas, p + Offset(-tp.width / 2, dy));
       }
     }
 
@@ -269,6 +362,35 @@ class MapPainter extends CustomPainter {
             ..strokeWidth = 1.2);
       final tp = _text('🚂', 10, Colors.white);
       tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
+    }
+
+    // грузовики
+    for (final t in world.trucks) {
+      final wp = t.at();
+      if (wp == null || !sv.contains(wp)) continue;
+      final p = cam.toScreen(wp);
+      final col = t.amount > 0 ? (world.cfg.res(t.cargo)?.color ?? AppColors.accent) : AppColors.surface2;
+      canvas.drawCircle(p, 9, Paint()..color = col);
+      canvas.drawCircle(
+          p,
+          9,
+          Paint()
+            ..color = t.id == selectedId ? AppColors.accent : Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = t.id == selectedId ? 2.5 : 1.2);
+      final tp = _text('🚚', 10, Colors.white);
+      tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
+    }
+    // маршрут выбранного грузовика
+    for (final t in world.trucks) {
+      if (t.id != selectedId || t.route.length < 2) continue;
+      final path = Path()..addPolygon([for (final q in t.route) cam.toScreen(q)], false);
+      canvas.drawPath(
+          path,
+          Paint()
+            ..color = AppColors.accent.withOpacity(0.8)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3);
     }
 
     // выделение
@@ -369,6 +491,21 @@ class HitTester {
       if (d < bd) {
         bd = d;
         best = r;
+      }
+    }
+    return best;
+  }
+
+  Truck? truck(Offset screen, {double radius = 16}) {
+    Truck? best;
+    double bd = radius;
+    for (final t in world.trucks) {
+      final p = t.at();
+      if (p == null) continue;
+      final d = (cam.toScreen(p) - screen).distance;
+      if (d < bd) {
+        bd = d;
+        best = t;
       }
     }
     return best;

@@ -559,6 +559,112 @@ def build_grid(line_els, sub_els, plant_els):
     return {"nodes": out_nodes, "edges": out_edges}
 
 
+# ---------------------------------------------------------------- дороги / ЖД (граф)
+def build_graph(els, cls_of, tol=0.002):
+    """Строит граф из ways: узлы — перекрёстки/концы, рёбра — участки между ними.
+    cls_of(tags) -> int класс или None (пропустить)."""
+    ways = []
+    use = {}
+    for e in els:
+        if e.get("type") != "way" or not e.get("geometry") or not e.get("nodes"):
+            continue
+        c = cls_of(e.get("tags", {}))
+        if c is None:
+            continue
+        ids = e["nodes"]
+        pts = geom_pts(e["geometry"])
+        if len(ids) != len(pts) or len(ids) < 2:
+            continue
+        ways.append((ids, pts, c))
+        for nid in ids:
+            use[nid] = use.get(nid, 0) + 1
+    # режем ways на рёбра по перекрёсткам
+    coord = {}
+    edges = []  # [a, b, cls, pts]
+    for ids, pts, c in ways:
+        start = 0
+        for k in range(1, len(ids)):
+            if k == len(ids) - 1 or use.get(ids[k], 0) > 1:
+                a, b = ids[start], ids[k]
+                if a != b:
+                    coord[a] = pts[start]
+                    coord[b] = pts[k]
+                    edges.append([a, b, c, pts[start:k + 1]])
+                start = k
+    # склеиваем цепочки через узлы степени 2 одного класса
+    adj = {}
+    for i, e in enumerate(edges):
+        adj.setdefault(e[0], []).append(i)
+        adj.setdefault(e[1], []).append(i)
+
+    def interior(v):
+        lst = adj.get(v, [])
+        return len(lst) == 2 and lst[0] != lst[1] and edges[lst[0]][2] == edges[lst[1]][2]
+
+    seen = [False] * len(edges)
+    merged = []
+
+    def walk(start_node, ei):
+        cur = start_node
+        pts = []
+        c = edges[ei][2]
+        while True:
+            seen[ei] = True
+            e = edges[ei]
+            seg = e[3] if e[0] == cur else e[3][::-1]
+            nxt = e[1] if e[0] == cur else e[0]
+            pts = seg if not pts else pts + seg[1:]
+            cur = nxt
+            if not interior(cur):
+                break
+            lst = adj[cur]
+            ei2 = lst[0] if lst[1] == ei else lst[1]
+            if seen[ei2]:
+                break
+            ei = ei2
+        return [start_node, cur, c, pts]
+
+    for v in list(adj.keys()):
+        if interior(v):
+            continue
+        for ei in adj[v]:
+            if not seen[ei]:
+                merged.append(walk(v, ei))
+    for ei in range(len(edges)):
+        if not seen[ei]:
+            merged.append(walk(edges[ei][0], ei))
+
+    idx = {}
+    nodes_flat = []
+    out_edges = []
+    for a, b, c, pts in merged:
+        if a == b and len(pts) < 4:
+            continue
+        for v in (a, b):
+            if v not in idx:
+                idx[v] = len(idx)
+                p = coord.get(v, pts[0] if v == a else pts[-1])
+                nodes_flat += [round(p[0], 4), round(p[1], 4)]
+        sp = simplify(pts, tol)
+        out_edges.append([idx[a], idx[b], c, round(path_km(pts), 2), flat(sp[1:-1], 4)])
+    return {"nodes": nodes_flat, "edges": out_edges}
+
+
+ROAD_CLS = {"motorway": 0, "motorway_link": 0, "trunk": 1, "trunk_link": 1, "primary": 2, "primary_link": 2}
+
+
+def road_cls(tags):
+    return ROAD_CLS.get(tags.get("highway"))
+
+
+def rail_cls(tags):
+    if tags.get("railway") != "rail" or tags.get("service"):
+        return None
+    if tags.get("usage") in ("industrial", "military", "tourism", "test"):
+        return None
+    return 0 if tags.get("electrified") in ("contact_line", "rail", "yes") else 1
+
+
 # ---------------------------------------------------------------- main
 def save(out_dir, name, obj):
     path = os.path.join(out_dir, name)
@@ -569,8 +675,10 @@ def save(out_dir, name, obj):
 
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "osm_out"
+    force = "--force" in sys.argv
     os.makedirs(out_dir, exist_ok=True)
     good = 0
+    fresh = 0
 
     steps = [
         ("oblasts.json", "области",
@@ -590,8 +698,20 @@ def main():
              overpass('nwr["power"="substation"]["voltage"~"(750000|400000|330000|220000)"](area.ua);out center;'),
              overpass('nwr["power"="plant"](area.ua);out center;')),
          lambda r: len(r["edges"]) >= 30),
+        ("roads.json", "дороги",
+         lambda: build_graph(overpass(
+             'way["highway"~"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link)$"](area.ua);out geom;'),
+             road_cls, 0.002),
+         lambda r: len(r["edges"]) >= 500),
+        ("railways.json", "железные дороги",
+         lambda: build_graph(overpass('way["railway"="rail"][!"service"](area.ua);out geom;'), rail_cls, 0.002),
+         lambda r: len(r["edges"]) >= 200),
     ]
     for fname, label, fn, check in steps:
+        if not force and os.path.exists(os.path.join(out_dir, fname)):
+            print(f"== {label}: уже есть, пропускаю", flush=True)
+            good += 1
+            continue
         print(f"== {label}", flush=True)
         try:
             res = fn()
@@ -600,13 +720,16 @@ def main():
                 continue
             save(out_dir, fname, res)
             good += 1
+            fresh += 1
+            open(os.path.join(out_dir, "new"), "w").close()
         except Exception as e:  # noqa: BLE001
             print(f"  ОШИБКА {label}: {e}", flush=True)
     STATS["good"] = good
-    save(out_dir, "stats.json", STATS)
+    if fresh:
+        save(out_dir, "stats.json", STATS)
     if good == len(steps):
         open(os.path.join(out_dir, "ok"), "w").close()
-    print(f"готово: {good}/{len(steps)}", flush=True)
+    print(f"готово: {good}/{len(steps)}, новых: {fresh}", flush=True)
 
 
 if __name__ == "__main__":

@@ -109,6 +109,19 @@ class InfoPanel extends StatelessWidget {
         title = 'ЖД-путь';
         rows.add(('Длина', '${r.lenKm.toStringAsFixed(0)} км', null));
         rows.add(('Соединяет', '${world.nodes[r.a]?.name ?? "?"} — ${world.nodes[r.b]?.name ?? "?"}', null));
+      case 'truck':
+        Truck? k;
+        for (final x in world.trucks) {
+          if (x.id == id) k = x;
+        }
+        if (k == null) return const SizedBox.shrink();
+        icon = '🚚';
+        title = 'Колонна ${world.nodes[k.from]?.name ?? ""} → ${world.nodes[k.to]?.name ?? ""}';
+        rows.add(('Груз', k.amount > 0 ? '${world.cfg.resName(k.cargo)}, ${fmtT(k.amount)}' : 'пусто', null));
+        rows.add(('Маршрут', '${k.total.toStringAsFixed(0)} км ${k.byRoad ? "по дорогам" : "напрямик"}', null));
+        rows.add(('Вместимость', fmtT(world.cfg.truckCapacityT), null));
+        rows.add(('Состояние', k.status, null));
+        note = 'Бирюзовая линия — маршрут. Возит туда-обратно, пока есть груз.';
       case 'train':
         Train? t;
         for (final x in world.trains) {

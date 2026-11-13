@@ -162,7 +162,7 @@ class _MenuScreenState extends State<MenuScreen> {
                 style: const TextStyle(color: AppColors.muted, fontSize: 11),
               ),
               const SizedBox(height: 4),
-              const Text('v0.1 — тестовая', textAlign: TextAlign.center,
+              const Text('v0.2 — тестовая', textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.muted, fontSize: 11)),
             ],
           ),

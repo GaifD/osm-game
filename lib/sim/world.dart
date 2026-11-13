@@ -16,6 +16,8 @@ class World {
   final Map<String, PLine> lines = {};
   final Map<String, Rail> rails = {};
   final List<Train> trains = [];
+  final List<Truck> trucks = [];
+  int tutStep = 0; // шаг обучения
   final Set<String> removedExisting = {};
 
   double hours = 6; // игровое время с начала (старт — 06:00 первого дня)
@@ -142,6 +144,7 @@ class World {
     _pendingH += gameH;
     _sinceSolve += realDt;
     _moveTrains(gameH);
+    _moveTrucks(gameH);
     if (_sinceSolve >= 0.25 || _pendingH >= 2) {
       step(_pendingH);
       _pendingH = 0;
@@ -581,6 +584,160 @@ class World {
     return null;
   }
 
+  // ------------------------------------------------------------ грузовики
+  String? addTruck(String aId, String bId) {
+    final a = nodes[aId], b = nodes[bId];
+    if (a == null || b == null || aId == bId) return 'Выбери два разных здания';
+    final ad = a.def, bd = b.def;
+    if (ad == null || ad.produces.isEmpty) return '«${a.name}» ничего не производит — начни с шахты, рудника или завода';
+    if (bd == null || bd.accepts.isEmpty) return '«${b.name}» не принимает грузы';
+    if (!ad.produces.keys.any(bd.accepts.contains)) {
+      final what = ad.produces.keys.map(cfg.resName).join(', ');
+      return '«${b.name}» не нужен груз «$what»';
+    }
+    final t = Truck(newId('k'), aId, bId);
+    _routeTruck(t);
+    trucks.add(t);
+    return t.byRoad ? null : 'Дорог рядом нет — колонна поедет напрямик';
+  }
+
+  void _routeTruck(Truck t) {
+    final a = nodes[t.from], b = nodes[t.to];
+    if (a == null || b == null) return;
+    final g = map.roads;
+    if (!g.isEmpty) {
+      final na = g.nearestNode(a.pos, 30), nb = g.nearestNode(b.pos, 30);
+      if (na >= 0 && nb >= 0) {
+        final r = g.route(na, nb);
+        if (r != null) {
+          t.setRoute([a.pos, ...r, b.pos]);
+          return;
+        }
+      }
+    }
+    t.setRoute([a.pos, b.pos], road: false);
+  }
+
+  void _moveTrucks(double h) {
+    final speed = cfg.truckSpeedKmh;
+    for (final t in trucks) {
+      final a = nodes[t.from], b = nodes[t.to];
+      if (a == null || b == null) continue;
+      if (t.route.isEmpty) _routeTruck(t);
+      if (t.dwell > 0) {
+        t.dwell -= h;
+        continue;
+      }
+      if (!t.back) {
+        if (t.pos <= 0 && t.amount < 1) {
+          final r = a.def!.produces.keys.firstWhere(b.def!.accepts.contains, orElse: () => '');
+          if (r.isNotEmpty) {
+            final have = a.stock[r] ?? 0;
+            final g = math.min(have, cfg.truckCapacityT);
+            a.stock[r] = have - g;
+            t.cargo = r;
+            t.amount = g;
+          }
+          if (t.amount < 1) {
+            t.status = 'Ждёт груз на «${a.name}»';
+            t.dwell = 1;
+            continue;
+          }
+        }
+        t.pos += speed * h;
+        t.status = 'Везёт ${cfg.resName(t.cargo)}, ${t.amount.toStringAsFixed(0)} т';
+        if (t.pos >= t.total) {
+          t.pos = t.total;
+          final room = b.def!.store - (b.stock[t.cargo] ?? 0);
+          final give = math.max(0.0, math.min(room, t.amount));
+          b.stock[t.cargo] = (b.stock[t.cargo] ?? 0) + give;
+          t.amount -= give;
+          if (t.amount < 1) {
+            t.amount = 0;
+            t.back = true;
+            t.dwell = 0.5;
+          } else {
+            t.status = 'Склад «${b.name}» полон';
+            t.dwell = 1;
+          }
+        }
+      } else {
+        t.pos -= speed * h;
+        t.status = 'Возвращается порожняком';
+        if (t.pos <= 0) {
+          t.pos = 0;
+          t.back = false;
+          t.dwell = 0.5;
+        }
+      }
+    }
+  }
+
+  void removeTruck(String id) => trucks.removeWhere((t) => t.id == id);
+
+  // ------------------------------------------------------------ советник
+  List<Issue> issues() {
+    final out = <Issue>[];
+    final linesAt = <String, List<PLine>>{};
+    for (final l in lines.values) {
+      linesAt.putIfAbsent(l.a, () => []).add(l);
+      linesAt.putIfAbsent(l.b, () => []).add(l);
+    }
+    for (final n in nodes.values) {
+      final d = n.def;
+      if (d == null || n.existing) continue;
+      final ls = linesAt[n.id] ?? const <PLine>[];
+      if (d.isGenerator) {
+        if (ls.isEmpty) {
+          out.add(Issue('«${n.name}» не подключена. Протяни ЛЭП ${d.kv.join(" или ")} кВ к подстанции с таким напряжением.',
+              node: n.id, sev: 2));
+        } else if (n.status.isNotEmpty) {
+          out.add(Issue('«${n.name}»: ${n.status}. Привези уголь грузовиком (Транспорт → Грузовик) или поездом.',
+              node: n.id, sev: 2));
+        } else if (n.genAvail > 5 && n.genMw < n.genAvail * 0.5 && d.kind == 'plant') {
+          out.add(Issue('«${n.name}» выдаёт ${n.genMw.toStringAsFixed(0)} из ${n.genAvail.toStringAsFixed(0)} МВт: '
+              'мощность некуда отдать. Подключи города или усиль линии.', node: n.id, sev: 1));
+        }
+      } else if (d.kind == 'sub') {
+        final kvs = {for (final l in ls) l.kv};
+        if (ls.isEmpty) {
+          out.add(Issue('«${n.name}» ни к чему не подключена.', node: n.id, sev: 1));
+        } else if (kvs.length == 1) {
+          final missing = d.kv.where((k) => !kvs.contains(k)).join('/');
+          out.add(Issue('«${n.name}» подключена только на ${kvs.first} кВ. Нужна вторая сторона: $missing кВ.',
+              node: n.id, sev: 1));
+        }
+      } else if (n.status.isNotEmpty) {
+        out.add(Issue('«${n.name}»: ${n.status}.', node: n.id, sev: 1));
+      }
+    }
+    for (final l in lines.values) {
+      if (l.virtual) continue;
+      final cap = cfg.volt(l.kv).capMw * l.circuits;
+      if (l.flow > cap * 0.97) {
+        out.add(Issue('ЛЭП ${l.kv} кВ перегружена (${l.flow.toStringAsFixed(0)} МВт). Проложи вторую линию или выше напряжение.',
+            line: l.id, sev: 1));
+      }
+    }
+    for (final t in trains) {
+      if (t.status == 'Нет пути' || t.status == 'Путь разобран') {
+        out.add(Issue('Поезд ${nodes[t.from]?.name ?? ""} → ${nodes[t.to]?.name ?? ""}: ${t.status}.', node: t.from, sev: 1));
+      }
+    }
+    final dark = nodes.values.where((n) => n.isCity && n.demandMw > 0 && n.supplyFrac < 0.99).toList()
+      ..sort((a, b) => b.pop.compareTo(a.pop));
+    if (dark.isNotEmpty) {
+      final top = dark.first;
+      out.add(Issue(
+          'Без света или с отключениями: ${dark.length} городов. Крупнейший — ${top.name} '
+          '(${(top.supplyFrac * 100).toStringAsFixed(0)}%). Города подключаются ЛЭП 110 или 35 кВ.',
+          node: top.id,
+          sev: 0));
+    }
+    out.sort((a, b) => b.sev.compareTo(a.sev));
+    return out;
+  }
+
   void demolishNode(String id) {
     final n = nodes[id];
     if (n == null || n.isCity) return;
@@ -593,6 +750,7 @@ class World {
     });
     rails.removeWhere((k, r) => r.a == id || r.b == id);
     trains.removeWhere((t) => t.from == id || t.to == id);
+    trucks.removeWhere((t) => t.from == id || t.to == id);
     for (final t in trains) {
       if (t.path.contains(id)) t.path = [];
     }
@@ -647,6 +805,11 @@ class World {
           for (final t in trains)
             {'id': t.id, 'from': t.from, 'to': t.to, 'cargo': t.cargo, 'amount': t.amount}
         ],
+        'trucks': [
+          for (final t in trucks)
+            {'id': t.id, 'from': t.from, 'to': t.to, 'cargo': t.cargo, 'amount': t.amount}
+        ],
+        'tut': tutStep,
       };
 
   static World fromJson(GameConfig cfg, MapData map, Map<String, dynamic> j) {
@@ -703,10 +866,26 @@ class World {
         ..amount = ((x['amount'] ?? 0) as num).toDouble();
       r.trains.add(t);
     }
+    for (final x in (j['trucks'] as List? ?? const [])) {
+      final t = Truck(x['id'] as String, x['from'] as String, x['to'] as String)
+        ..cargo = (x['cargo'] ?? '') as String
+        ..amount = ((x['amount'] ?? 0) as num).toDouble();
+      if (!r.nodes.containsKey(t.from) || !r.nodes.containsKey(t.to)) continue;
+      r._routeTruck(t);
+      r.trucks.add(t);
+    }
+    r.tutStep = ((j['tut'] ?? 0) as num).toInt();
     r._updateCatchment();
     r.step(0.01);
     return r;
   }
 
   World._empty(this.cfg, this.map, {required bool ready}) : readyMode = ready;
+}
+
+class Issue {
+  final String text;
+  final String? node, line;
+  final int sev; // 2 — серьёзно, 1 — важно, 0 — инфо
+  Issue(this.text, {this.node, this.line, this.sev = 1});
 }

@@ -4,6 +4,8 @@
   "cityKwPerPerson": 0.55,
   "trainCapacityT": 3000,
   "trainSpeedKmh": 60,
+  "truckCapacityT": 600,
+  "truckSpeedKmh": 70,
   "autoFeederKm": 30,
 
   "voltages": [
@@ -35,7 +37,7 @@
     {"id": "grid",     "name": "Сеть",     "icon": "🔌"},
     {"id": "mining",   "name": "Добыча",   "icon": "⛏"},
     {"id": "industry", "name": "Заводы",   "icon": "🏭"},
-    {"id": "rail",     "name": "ЖД",       "icon": "🚂"}
+    {"id": "rail",     "name": "Транспорт", "icon": "🚚"}
   ],
 
   "buildings": [

@@ -4,6 +4,8 @@ import 'dart:ui';
 
 import 'package:flutter/services.dart';
 
+import '../util/heap.dart';
+
 /// Простая проекция: мировые координаты в километрах от центра Украины.
 /// x — на восток, y — на юг (как на экране).
 const double kLat0 = 48.5;
@@ -142,9 +144,11 @@ class MapData {
   final List<CityData> cities;
   final List<GridNodeData> gridNodes;
   final List<GridEdgeData> gridEdges;
+  final NetGraph roads;
+  final NetGraph railways;
   final Rect bounds;
 
-  MapData(this.oblasts, this.rivers, this.cities, this.gridNodes, this.gridEdges)
+  MapData(this.oblasts, this.rivers, this.cities, this.gridNodes, this.gridEdges, this.roads, this.railways)
       : bounds = oblasts.isEmpty
             ? const Rect.fromLTRB(-700, -450, 700, 450)
             : oblasts.map((o) => o.bounds).reduce((a, b) => a.expandToInclude(b));
@@ -213,6 +217,147 @@ class MapData {
         flatToPts(e['pts'] as List),
       ));
     }
-    return MapData(obl, riv, cities, gn, ge);
+    NetGraph roads, rails;
+    try {
+      roads = NetGraph.parse(await _json('roads.json'));
+    } catch (_) {
+      roads = NetGraph([], []);
+    }
+    try {
+      rails = NetGraph.parse(await _json('railways.json'));
+    } catch (_) {
+      rails = NetGraph([], []);
+    }
+    return MapData(obl, riv, cities, gn, ge, roads, rails);
+  }
+}
+
+class NetEdge {
+  final int a, b, cls;
+  final double lenKm;
+  final List<Offset> pts; // включая концы
+  NetEdge(this.a, this.b, this.cls, this.lenKm, this.pts);
+}
+
+/// Граф дорог или железных дорог из OSM.
+class NetGraph {
+  final List<Offset> nodes;
+  final List<NetEdge> edges;
+  final List<List<int>> adj;
+  // кусочки для быстрой отрисовки: класс -> ячейка -> Path
+  final Map<int, Map<int, Path>> chunks = {};
+  final Map<int, Rect> chunkRect = {};
+  final Map<int, List<int>> _cells = {};
+  static const double chunkKm = 150;
+  static const double cellKm = 20;
+
+  NetGraph(this.nodes, this.edges) : adj = List.generate(nodes.length, (_) => <int>[]) {
+    for (int i = 0; i < edges.length; i++) {
+      final e = edges[i];
+      adj[e.a].add(i);
+      adj[e.b].add(i);
+      final c = e.pts.first;
+      final key = (c.dx / chunkKm).floor() * 100000 + (c.dy / chunkKm).floor();
+      final p = chunks.putIfAbsent(e.cls, () => {}).putIfAbsent(key, () => Path());
+      p.addPolygon(e.pts, false);
+      var r = chunkRect[key];
+      for (final q in e.pts) {
+        final pr = Rect.fromCenter(center: q, width: 0.1, height: 0.1);
+        r = r == null ? pr : r.expandToInclude(pr);
+      }
+      chunkRect[key] = r!;
+    }
+    for (int i = 0; i < nodes.length; i++) {
+      if (adj[i].isEmpty) continue;
+      _cells.putIfAbsent(_cell(nodes[i]), () => []).add(i);
+    }
+  }
+
+  bool get isEmpty => edges.isEmpty;
+
+  int _cell(Offset p) => (p.dx / cellKm).floor() * 100000 + (p.dy / cellKm).floor();
+
+  /// Ближайший узел графа в пределах [maxKm], иначе -1.
+  int nearestNode(Offset p, double maxKm) {
+    final cx = (p.dx / cellKm).floor(), cy = (p.dy / cellKm).floor();
+    final r = (maxKm / cellKm).ceil();
+    int best = -1;
+    double bd = maxKm;
+    for (int x = cx - r; x <= cx + r; x++) {
+      for (int y = cy - r; y <= cy + r; y++) {
+        for (final i in _cells[x * 100000 + y] ?? const <int>[]) {
+          final d = (nodes[i] - p).distance;
+          if (d < bd) {
+            bd = d;
+            best = i;
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Кратчайший путь: точки маршрута от узла [from] до [to] или null.
+  List<Offset>? route(int from, int to) {
+    if (from == to) return [nodes[from]];
+    final n = nodes.length;
+    final dist = List<double>.filled(n, double.infinity);
+    final prev = List<int>.filled(n, -1);
+    final heap = MinHeap();
+    dist[from] = 0;
+    heap.push(0, from);
+    while (heap.isNotEmpty) {
+      final d = heap.topKey;
+      final u = heap.pop();
+      if (d > dist[u]) continue;
+      if (u == to) break;
+      for (final ei in adj[u]) {
+        final e = edges[ei];
+        final v = e.a == u ? e.b : e.a;
+        // магистрали «дешевле» — грузовики предпочитают трассы
+        final w = e.lenKm * (e.cls == 0 ? 0.8 : (e.cls == 1 ? 0.9 : 1.0));
+        final nd = d + w;
+        if (nd < dist[v]) {
+          dist[v] = nd;
+          prev[v] = ei;
+          heap.push(nd, v);
+        }
+      }
+    }
+    if (dist[to] == double.infinity) return null;
+    final segs = <List<Offset>>[];
+    int v = to;
+    while (v != from) {
+      final e = edges[prev[v]];
+      final pts = e.b == v ? e.pts : e.pts.reversed.toList();
+      segs.add(pts);
+      v = e.b == v ? e.a : e.b;
+    }
+    final out = <Offset>[];
+    for (final s in segs.reversed) {
+      if (out.isEmpty) {
+        out.addAll(s);
+      } else {
+        out.addAll(s.skip(1));
+      }
+    }
+    return out;
+  }
+
+  static NetGraph parse(dynamic j) {
+    final nf = (j['nodes'] as List? ?? const []);
+    final nodes = <Offset>[];
+    for (int i = 0; i + 1 < nf.length; i += 2) {
+      nodes.add(proj((nf[i] as num).toDouble(), (nf[i + 1] as num).toDouble()));
+    }
+    final edges = <NetEdge>[];
+    for (final e in (j['edges'] as List? ?? const [])) {
+      final l = e as List;
+      final a = (l[0] as num).toInt(), b = (l[1] as num).toInt();
+      if (a >= nodes.length || b >= nodes.length) continue;
+      final mid = flatToPts(l[4] as List);
+      edges.add(NetEdge(a, b, (l[2] as num).toInt(), (l[3] as num).toDouble(), [nodes[a], ...mid, nodes[b]]));
+    }
+    return NetGraph(nodes, edges);
   }
 }

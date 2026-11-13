@@ -10,8 +10,9 @@ import '../sim/world.dart';
 import '../theme.dart';
 import 'info_panel.dart';
 import 'map_painter.dart';
+import 'tutorial.dart';
 
-enum Tool { none, build, line, rail, train, demolish }
+enum Tool { none, build, line, rail, train, truck, demolish }
 
 class GameScreen extends StatefulWidget {
   final GameData data;
@@ -45,7 +46,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   String? _openCat;
   String? _pending; // первая точка линии/пути/поезда
   String? _selected; // id выбранного объекта
-  String _selKind = ''; // node, line, rail, train
+  String _selKind = ''; // node, line, rail, train, truck
+  bool _tutOpen = true;
+  bool _legend = false;
+  List<Issue> _issues = [];
 
   // жесты
   double _startScale = 1;
@@ -82,6 +86,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     _hudTimer += rdt;
     if (_hudTimer > 0.3) {
       _hudTimer = 0;
+      _issues = w.issues();
+      _checkTutorial();
       if (mounted) setState(() {});
     }
     _saveTimer += rdt;
@@ -89,6 +95,25 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       _saveTimer = 0;
       _save(silent: true);
     }
+  }
+
+  void _checkTutorial() {
+    if (w.readyMode) return;
+    while (w.tutStep < tutorialSteps.length && tutorialSteps[w.tutStep].done(w)) {
+      w.tutStep++;
+      if (mounted) {
+        _toast(w.tutStep >= tutorialSteps.length
+            ? '🎉 Обучение пройдено! Дальше — свободная игра'
+            : '✅ Задание выполнено! Следующее: ${tutorialSteps[w.tutStep].title}');
+      }
+      _tutOpen = true;
+    }
+  }
+
+  void _flyTo(Offset p) {
+    cam.center = p;
+    cam.scale = math.max(cam.scale, 2.0);
+    _frame.value++;
   }
 
   Future<void> _save({bool silent = false}) async {
@@ -120,6 +145,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     final hit = HitTester(w, cam, layers);
     switch (_tool) {
       case Tool.none:
+        final k = hit.truck(pos);
+        if (k != null) return _select(k.id, 'truck');
         final t = hit.train(pos);
         if (t != null) return _select(t.id, 'train');
         final n = hit.node(pos);
@@ -168,7 +195,26 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           setState(() => _pending = _tool == Tool.rail ? n.id : null);
           if (err == null && _tool == Tool.train) _toast('Поезд запущен');
         }
+      case Tool.truck:
+        final n = hit.node(pos, where: (x) => x.def != null && !x.existing);
+        if (n == null) return _toast(_pending == null ? 'Коснись шахты, рудника или завода' : 'Коснись здания-получателя');
+        if (_pending == null) {
+          if (n.def!.produces.isEmpty) return _toast('«${n.name}» ничего не производит');
+          setState(() => _pending = n.id);
+        } else {
+          final err = w.addTruck(_pending!, n.id);
+          if (err != null) _toast(err);
+          if (err == null || err.startsWith('Дорог')) {
+            if (err == null) _toast('Колонна отправлена');
+            setState(() => _pending = null);
+          }
+        }
       case Tool.demolish:
+        final k = hit.truck(pos);
+        if (k != null) {
+          w.removeTruck(k.id);
+          return setState(() {});
+        }
         final t = hit.train(pos);
         if (t != null) {
           w.removeTrain(t.id);
@@ -223,6 +269,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         return _pending == null ? 'Рельсы: выбери первую станцию' : 'Рельсы: выбери следующую станцию';
       case Tool.train:
         return _pending == null ? 'Поезд: станция отправления' : 'Поезд: станция назначения';
+      case Tool.truck:
+        return _pending == null ? 'Грузовик: откуда (шахта, рудник, завод)' : 'Грузовик: куда везти (ТЭС, завод)';
       case Tool.demolish:
         return 'Снос: коснись объекта, линии или поезда';
       case Tool.none:
@@ -262,6 +310,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   selectedId: _selected,
                   pendingId: _pending,
                   pulse: (math.sin(_pulseT * 6) + 1) / 2,
+                  highlightKv: _tool == Tool.line ? _lineKv : null,
                   repaint: _frame,
                 ),
                 size: Size.infinite,
@@ -269,6 +318,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             ),
           ),
           Positioned(left: 0, right: 0, top: 0, child: SafeArea(child: _topBar())),
+          if (_legend) Positioned(right: 8, top: 150, child: SafeArea(child: _legendCard())),
           Positioned(left: 0, right: 0, bottom: 0, child: SafeArea(child: _bottom())),
         ]);
       }),
@@ -314,6 +364,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           ]),
         ]),
       ),
+      _quickRow(),
+      if (!w.readyMode && w.tutStep < tutorialSteps.length && _tool == Tool.none && _selected == null) _tutCard(),
       if (_tool != Tool.none)
         _card(
           padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
@@ -327,6 +379,150 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           ]),
         ),
     ]);
+  }
+
+  Widget _quickRow() {
+    final serious = _issues.where((i) => i.sev >= 1).length;
+    Widget chip(String text, VoidCallback onTap, {Color? color}) => GestureDetector(
+          onTap: onTap,
+          child: Container(
+            margin: const EdgeInsets.only(left: 8, top: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.94),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: (color ?? AppColors.border).withOpacity(0.8)),
+            ),
+            child: Text(text, style: TextStyle(color: color ?? AppColors.text, fontWeight: FontWeight.w600, fontSize: 13)),
+          ),
+        );
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          chip(serious > 0 ? '💡 Советник · $serious' : '💡 Советник', _advisor,
+              color: serious > 0 ? AppColors.warn : null),
+          chip(_legend ? '🎨 Легенда ✕' : '🎨 Легенда', () => setState(() => _legend = !_legend)),
+          if (!w.readyMode && w.tutStep < tutorialSteps.length && !_tutOpen)
+            chip('📘 Задание ${w.tutStep + 1}/${tutorialSteps.length}', () => setState(() => _tutOpen = true)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _tutCard() {
+    if (!_tutOpen) return const SizedBox.shrink();
+    final st = tutorialSteps[w.tutStep];
+    return _card(
+      padding: const EdgeInsets.fromLTRB(14, 8, 4, 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('📘 Задание ${w.tutStep + 1}/${tutorialSteps.length}: ${st.title}',
+                style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
+          ),
+          IconButton(
+            icon: const Icon(Icons.expand_less, color: AppColors.muted),
+            visualDensity: VisualDensity.compact,
+            onPressed: () => setState(() => _tutOpen = false),
+          ),
+        ]),
+        Padding(
+          padding: const EdgeInsets.only(right: 10),
+          child: Text(st.hint, style: const TextStyle(fontSize: 13, color: AppColors.text)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _legendCard() {
+    Widget row(Widget a, String t) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(width: 26, child: Center(child: a)),
+            const SizedBox(width: 6),
+            Text(t, style: const TextStyle(fontSize: 12)),
+          ]),
+        );
+    Widget lineSw(Color c, double h) => Container(width: 22, height: h, color: c);
+    Widget dot(Color c) => Container(width: 12, height: 12, decoration: BoxDecoration(color: c, shape: BoxShape.circle));
+    return Container(
+      width: 210,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.surface.withOpacity(0.96),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        const Text('ЛЭП', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+        for (final v in cfg.voltages)
+          row(lineSw(v.color, v.width + 1),
+              '${v.kv} кВ · до ${fmtMw(v.capMw)}'),
+        const SizedBox(height: 6),
+        const Text('Города', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+        row(dot(AppColors.good), 'свет есть (100%)'),
+        row(dot(AppColors.warn), 'отключения'),
+        row(dot(AppColors.bad), 'почти без света'),
+        const SizedBox(height: 6),
+        const Text('Дороги', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+        row(lineSw(const Color(0xFFE0A040), 3), 'автомагистраль'),
+        row(lineSw(const Color(0xFFB8A070), 2.5), 'трасса'),
+        row(lineSw(const Color(0xFF6E7781), 2), 'основная дорога'),
+        row(lineSw(const Color(0xFF9C7FD0), 2), 'ЖД электрифиц.'),
+        row(lineSw(const Color(0xFF8D7B6A), 2), 'ЖД'),
+        const SizedBox(height: 6),
+        const Text('Квадрат — подстанция, круг — здание.\nЖёлтая обводка — есть проблема.',
+            style: TextStyle(color: AppColors.muted, fontSize: 11)),
+      ]),
+    );
+  }
+
+  void _advisor() {
+    final list = w.issues();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.7),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Text('💡 Советник', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+            ),
+            if (list.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Text('Проблем нет — всё работает 👍', style: TextStyle(color: AppColors.muted)),
+              ),
+            Flexible(
+              child: ListView(shrinkWrap: true, children: [
+                for (final i in list)
+                  ListTile(
+                    leading: Text(i.sev >= 2 ? '🔴' : (i.sev == 1 ? '🟡' : 'ℹ️'), style: const TextStyle(fontSize: 18)),
+                    title: Text(i.text, style: const TextStyle(fontSize: 14)),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      if (i.node != null && w.nodes[i.node] != null) {
+                        _flyTo(w.nodes[i.node]!.pos);
+                        _select(i.node, 'node');
+                      } else if (i.line != null && w.lines[i.line] != null) {
+                        final l = w.lines[i.line]!;
+                        _flyTo(l.pts[l.pts.length ~/ 2]);
+                        _select(i.line, 'line');
+                      }
+                    },
+                  ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 
   Widget _speedBtn(int i, String label) {
@@ -369,6 +565,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                 w.demolishRail(_selected!);
               case 'train':
                 w.removeTrain(_selected!);
+              case 'truck':
+                w.removeTruck(_selected!);
             }
             w.step(0.01);
             _select(null, '');
@@ -464,6 +662,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             () => setState(() => layers.labels = !layers.labels)),
         _item('〰', 'Местные сети', layers.feeders ? 'показаны' : 'при приближении', layers.feeders,
             () => setState(() => layers.feeders = !layers.feeders)),
+        _item('🛣', 'Дороги OSM', layers.roads ? 'показаны' : 'скрыты', layers.roads,
+            () => setState(() => layers.roads = !layers.roads)),
+        _item('🛤', 'ЖД OSM', layers.osmRail ? 'показана' : 'скрыта', layers.osmRail,
+            () => setState(() => layers.osmRail = !layers.osmRail)),
+        _item('🔢', 'Подписи кВ', layers.kvLabels ? 'показаны' : 'скрыты', layers.kvLabels,
+            () => setState(() => layers.kvLabels = !layers.kvLabels)),
       ]);
     } else {
       if (cat == 'grid') {
@@ -478,12 +682,17 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       }
       for (final d in cfg.buildings.values.where((b) => b.cat == cat)) {
         String sub = d.desc;
-        if (d.kind == 'plant' || d.kind == 'storage') sub = '${fmtMw(d.mw)} · ${d.kv.join("/")} кВ\n${d.desc}';
-        if (d.kind == 'sub') sub = '${d.kv.join("/")} кВ · ${fmtMw(d.capMw)}';
+        if (d.kind == 'plant' || d.kind == 'storage') sub = '${fmtMw(d.mw)} · выход ${d.kv.join("/")} кВ\n${d.desc}';
+        if (d.kind == 'sub') sub = 'Связывает ${d.kv.join(" ↔ ")} кВ · до ${fmtMw(d.capMw)}';
+        if (d.loadMw > 0) sub = 'Ест ${fmtMw(d.loadMw)}, свет — авто от города/ПС в ${cfg.autoFeederKm.round()} км\n${d.desc}';
         items.add(_item(d.icon, d.name, sub, _tool == Tool.build && _buildDef?.id == d.id,
             () => _setTool(Tool.build, def: d)));
       }
       if (cat == 'rail') {
+        items.insert(
+            0,
+            _item('🚚', 'Грузовик', 'Возит груз по дорогам: тапни шахту, потом ТЭС или завод', _tool == Tool.truck,
+                () => _setTool(Tool.truck)));
         items.add(_item('🛤', 'Рельсы', 'Соедини две станции', _tool == Tool.rail, () => _setTool(Tool.rail)));
         items.add(_item('🚂', 'Поезд', 'Возит грузы между двумя станциями туда-обратно', _tool == Tool.train,
             () => _setTool(Tool.train)));
